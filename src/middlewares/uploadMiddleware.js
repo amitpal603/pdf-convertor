@@ -18,19 +18,20 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter (only images)
+// File filter (images and PDF)
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype.startsWith('image/')) {
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+  if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Not an image! Please upload only images.'), false);
+    cb(new Error('Only images (JPEG, PNG, WEBP) and PDF files are allowed!'), false);
   }
 };
 
 const upload = multer({ 
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 20 * 1024 * 1024 } // Increased to 20MB for PDFs
 });
 
 module.exports = upload;
