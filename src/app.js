@@ -11,9 +11,15 @@ const app = express();
 
 // Standard Middleware
 app.use(helmet());
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://pdf-convertor-frontend.vercel.app',
+  process.env.CLIENT_URL
+].filter(Boolean);
+
 app.use(cors({
-  origin: 'https://pdf-convertor-frontend.vercel.app', // Adjust to your frontend URL
-  credentials: true, // Required for cookies
+  origin: allowedOrigins,
+  credentials: true,
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

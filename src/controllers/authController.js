@@ -72,7 +72,7 @@ exports.login = async (req, res, next) => {
         const cookieOptions = {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production', // Secure in production
-            sameSite: 'Lax',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'Lax',
         };
 
         res.cookie('accessToken', accessToken, { 
@@ -207,7 +207,7 @@ exports.refreshToken = async (req, res, next) => {
         const cookieOptions = {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            sameSite: 'Lax',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'Lax',
         };
 
         res.cookie('accessToken', newAccessToken, { 
