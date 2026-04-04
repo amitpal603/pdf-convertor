@@ -1,4 +1,5 @@
-const pdf = require('pdf-poppler');
+const { createCanvas } = require('@napi-rs/canvas');
+const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
 const path = require('path');
 const fs = require('fs');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
@@ -19,17 +20,16 @@ exports.convertPdfToImages = async (req, res, next) => {
 
         const outputFormat = req.body.outputFormat || 'jpeg';
         const tempDir = path.join(__dirname, '../../public/temp');
+        
+        // Ensure temp directory exists
+        if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+        }
+
         const fileBaseName = path.basename(file.path, path.extname(file.path));
         
         // Track the original PDF for cleanup
         tempFiles.push(file.path);
-
-        const opts = {
-            format: outputFormat,
-            out_dir: tempDir,
-            out_prefix: fileBaseName,
-            page: null // Convert all pages
-        };
 
         // Create the initial database record
         const pdfToImageRecord = await PdfToImage.create({
@@ -42,43 +42,51 @@ exports.convertPdfToImages = async (req, res, next) => {
 
         // Start conversion
         try {
-            await pdf.convert(file.path, opts);
-            
-            // Find generated images in the temp directory
-            const generatedFiles = fs.readdirSync(tempDir).filter(f => 
-                f.startsWith(fileBaseName) && 
-                (f.endsWith('.jpg') || f.endsWith('.png') || f.endsWith('.webp')) &&
-                f !== path.basename(file.path)
-            );
-
-            // Sort files to ensure page order (e.g., prefix-1.jpg, prefix-2.jpg)
-            generatedFiles.sort((a, b) => {
-                const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
-                const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
-                return numA - numB;
+            // Load PDF document
+            const data = fs.readFileSync(file.path);
+            const loadingTask = pdfjs.getDocument({
+                data,
+                nativeImageDecoderSupport: 'none',
+                disableFontFace: true // Often safer in Node.js environments
             });
+            const pdfDoc = await loadingTask.promise;
+            
+            const numPages = pdfDoc.numPages;
+            const images = [];
 
-            const imageUploadPromises = generatedFiles.map(async (fileName, index) => {
+            for (let i = 1; i <= numPages; i++) {
+                const page = await pdfDoc.getPage(i);
+                const viewport = page.getViewport({ scale: 2.0 }); // High quality scale
+                
+                const canvas = createCanvas(viewport.width, viewport.height);
+                const context = canvas.getContext('2d');
+
+                await page.render({
+                    canvasContext: context,
+                    viewport: viewport,
+                }).promise;
+
+                // Encode to buffer (jpeg or png)
+                const format = outputFormat === 'png' ? 'png' : 'jpeg';
+                const imageBuffer = await canvas.encode(format);
+                
+                const fileName = `${fileBaseName}-${i}.${format === 'jpeg' ? 'jpg' : 'png'}`;
                 const filePath = path.join(tempDir, fileName);
-                tempFiles.push(filePath); // Track for cleanup
+                
+                fs.writeFileSync(filePath, imageBuffer);
+                tempFiles.push(filePath);
 
                 const uploadResult = await uploadOnCloudinary(filePath, 'pdf_to_images');
-                return {
-                    pageNumber: index + 1,
+                images.push({
+                    pageNumber: i,
                     imageUrl: uploadResult.secure_url
-                };
-            });
-
-            const uploadedImages = await Promise.all(imageUploadPromises);
+                });
+            }
 
             // Update record with completion details
-            pdfToImageRecord.images = uploadedImages;
+            pdfToImageRecord.images = images;
             pdfToImageRecord.status = 'completed';
             pdfToImageRecord.totalProgress = 100;
-            // Note: Since we don't have a public URL for the original PDF yet (it's in temp),
-            // we might want to upload that too if needed, but the model originalPdfUrl 
-            // usually refers to the source. For this tool, the source is the local temp file.
-            // Let's just set it to the original filename for now or a dummy URL.
             pdfToImageRecord.originalPdfUrl = 'source_file_processed'; 
             await pdfToImageRecord.save();
 
@@ -89,6 +97,7 @@ exports.convertPdfToImages = async (req, res, next) => {
             });
 
         } catch (convErr) {
+            console.error('Conversion Error:', convErr);
             pdfToImageRecord.status = 'failed';
             pdfToImageRecord.error = convErr.message;
             await pdfToImageRecord.save();
