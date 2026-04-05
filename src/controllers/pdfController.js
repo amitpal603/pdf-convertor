@@ -162,3 +162,22 @@ exports.deletePdf = async (req, res, next) => {
         next(err);
     }
 };
+
+/**
+ * Get Image-to-PDF history for a user
+ */
+exports.getImageToPdfHistory = async (req, res, next) => {
+    try {
+        const history = await Pdf.find({ 
+            user: req.user._id,
+            conversionType: 'image-to-pdf'
+        }).sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            history
+        });
+    } catch (err) {
+        next(err);
+    }
+};
