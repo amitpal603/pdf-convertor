@@ -1,5 +1,3 @@
-const { createCanvas } = require('@napi-rs/canvas');
-const pdfjs = require('pdfjs-dist/legacy/build/pdf.js');
 const path = require('path');
 const fs = require('fs');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
@@ -42,45 +40,44 @@ exports.convertPdfToImages = async (req, res, next) => {
 
         // Start conversion
         try {
-            // Load PDF document
-            const data = fs.readFileSync(file.path);
-            const loadingTask = pdfjs.getDocument({
-                data,
-                nativeImageDecoderSupport: 'none',
-                disableFontFace: true // Often safer in Node.js environments
-            });
-            const pdfDoc = await loadingTask.promise;
+            const pdf = require('pdf-poppler');
             
-            const numPages = pdfDoc.numPages;
+            const options = {
+                format: outputFormat === 'png' ? 'png' : 'jpeg',
+                out_dir: tempDir,
+                out_prefix: fileBaseName,
+                page: null // Convert all pages
+            };
+
+            // pdf-poppler returns a promise
+            await pdf.convert(file.path, options);
+            
+            // Find all generated images in the temp directory
+            const filesInTemp = fs.readdirSync(tempDir);
+            const generatedImages = filesInTemp
+                .filter(fileName => fileName.startsWith(fileBaseName) && fileName !== path.basename(file.path))
+                .sort((a, b) => {
+                    // Sort by page number (e.g., file-1.jpg, file-2.jpg)
+                    const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
+                    const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
+                    return numA - numB;
+                });
+
             const images = [];
-
-            for (let i = 1; i <= numPages; i++) {
-                const page = await pdfDoc.getPage(i);
-                const viewport = page.getViewport({ scale: 2.0 }); // High quality scale
-                
-                const canvas = createCanvas(viewport.width, viewport.height);
-                const context = canvas.getContext('2d');
-
-                await page.render({
-                    canvasContext: context,
-                    viewport: viewport,
-                }).promise;
-
-                // Encode to buffer (jpeg or png)
-                const format = outputFormat === 'png' ? 'png' : 'jpeg';
-                const imageBuffer = await canvas.encode(format);
-                
-                const fileName = `${fileBaseName}-${i}.${format === 'jpeg' ? 'jpg' : 'png'}`;
+            for (let i = 0; i < generatedImages.length; i++) {
+                const fileName = generatedImages[i];
                 const filePath = path.join(tempDir, fileName);
-                
-                fs.writeFileSync(filePath, imageBuffer);
                 tempFiles.push(filePath);
 
                 const uploadResult = await uploadOnCloudinary(filePath, 'pdf_to_images');
                 images.push({
-                    pageNumber: i,
+                    pageNumber: i + 1,
                     imageUrl: uploadResult.secure_url
                 });
+            }
+
+            if (images.length === 0) {
+                throw new Error('No images were generated during conversion. Ensure Poppler is installed.');
             }
 
             // Update record with completion details
