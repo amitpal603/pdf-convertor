@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { uploadOnCloudinary, deleteFromCloudinary } = require('../utils/cloudinary');
 const Pdf = require('../models/PdfModel');
+const { cache } = require('../config/redis');
 
 /**
  * Image-to-PDF Conversion Controller
@@ -68,6 +69,9 @@ exports.imageToPdf = async (req, res, next) => {
                         pageCount: files.length
                     }
                 });
+
+                // Clear history cache
+                await cache.del(`history:${req.user._id}:imageToPdf`);
 
                 res.status(201).json({
                     success: true,
@@ -154,6 +158,9 @@ exports.deletePdf = async (req, res, next) => {
         // Delete from Database
         await Pdf.findByIdAndDelete(id);
 
+        // Clear history cache
+        await cache.del(`history:${req.user._id}:imageToPdf`);
+
         res.status(200).json({
             success: true,
             message: 'PDF deleted successfully'
@@ -168,14 +175,31 @@ exports.deletePdf = async (req, res, next) => {
  */
 exports.getImageToPdfHistory = async (req, res, next) => {
     try {
+        const cacheKey = `history:${req.user._id}:imageToPdf`;
+
+        // 1. Try to get from cache
+        const cachedHistory = await cache.get(cacheKey);
+        if (cachedHistory) {
+            return res.status(200).json({
+                success: true,
+                history: cachedHistory,
+                source: 'cache'
+            });
+        }
+
+        // 2. If not in cache, fetch from database
         const history = await Pdf.find({ 
             user: req.user._id,
             conversionType: 'image-to-pdf'
         }).sort({ createdAt: -1 });
 
+        // 3. Store in cache (TTL: 1 hour)
+        await cache.set(cacheKey, history, 3600);
+
         res.status(200).json({
             success: true,
-            history
+            history,
+            source: 'database'
         });
     } catch (err) {
         next(err);

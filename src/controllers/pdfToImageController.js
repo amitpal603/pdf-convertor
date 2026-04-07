@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const { uploadOnCloudinary } = require('../utils/cloudinary');
 const PdfToImage = require('../models/PdfToImageModel');
+const { cache } = require('../config/redis');
 
 /**
  * PDF to Image Conversion Controller
@@ -87,6 +88,11 @@ exports.convertPdfToImages = async (req, res, next) => {
             pdfToImageRecord.originalPdfUrl = 'source_file_processed'; 
             await pdfToImageRecord.save();
 
+            await pdfToImageRecord.save();
+
+            // Clear history cache for the user on successful conversion
+            await cache.del(`history:${req.user._id}:pdfToImage`);
+
             res.status(200).json({
                 success: true,
                 message: 'PDF converted to images successfully!',
@@ -98,6 +104,9 @@ exports.convertPdfToImages = async (req, res, next) => {
             pdfToImageRecord.status = 'failed';
             pdfToImageRecord.error = convErr.message;
             await pdfToImageRecord.save();
+            // Clear history cache for the user on successful conversion
+            await cache.del(`history:${req.user._id}:pdfToImage`);
+            
             throw convErr;
         }
 
@@ -156,8 +165,29 @@ exports.downloadImage = async (req, res, next) => {
  */
 exports.getConversionHistory = async (req, res, next) => {
     try {
+        const cacheKey = `history:${req.user._id}:pdfToImage`;
+
+        // 1. Try to get from cache
+        const cachedHistory = await cache.get(cacheKey);
+        if (cachedHistory) {
+            return res.status(200).json({ 
+                success: true, 
+                history: cachedHistory,
+                source: 'cache'
+            });
+        }
+
+        // 2. If not in cache, fetch from database
         const history = await PdfToImage.find({ user: req.user._id }).sort({ createdAt: -1 });
-        res.status(200).json({ success: true, history });
+
+        // 3. Store in cache (TTL: 1 hour)
+        await cache.set(cacheKey, history, 3600);
+
+        res.status(200).json({ 
+            success: true, 
+            history,
+            source: 'database'
+        });
     } catch (err) {
         next(err);
     }
@@ -182,6 +212,9 @@ exports.deleteConversion = async (req, res, next) => {
         // Optional: Delete images from Cloudinary if needed. 
         // For now, just delete from DB.
         await PdfToImage.findByIdAndDelete(id);
+
+        // Clear history cache
+        await cache.del(`history:${req.user._id}:pdfToImage`);
 
         res.status(200).json({ success: true, message: 'Record deleted successfully' });
     } catch (err) {

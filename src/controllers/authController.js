@@ -1,13 +1,14 @@
 const User = require('../models/UserModel');
 const BlacklistedToken = require('../models/BlacklistedTokenModel');
 const jwt = require('jsonwebtoken');
+const { cache } = require('../config/redis');
 
 /**
  * Register a new user
  */
 exports.register = async (req, res, next) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, email, password ,role} = req.body;
 
         // Check if user already exists
         const existingUser = await User.findOne({ email });
@@ -16,7 +17,7 @@ exports.register = async (req, res, next) => {
         }
 
         // Create new user (password is hashed in pre-save hook)
-        const user = await User.create({ name, email, password });
+        const user = await User.create({ name, email, password , role : role || "user" });
 
         res.status(201).json({
             success: true,
@@ -53,13 +54,13 @@ exports.login = async (req, res, next) => {
 
         // Generate Tokens
         const accessToken = jwt.sign(
-            { id: user._id, email: user.email },
+            { id: user._id, email: user.email , role : user.role },
             process.env.ACCESS_SECRET_TOKEN,
             { expiresIn: '1d' } // 1 day for access token
         );
 
         const refreshToken = jwt.sign(
-            { id: user._id },
+            { id: user._id , role : user.role},
             process.env.REFRESH_SECRET_TOKEN,
             { expiresIn: '7d' } // 7 days for refresh token
         );
@@ -125,6 +126,8 @@ exports.logout = async (req, res, next) => {
             const userId = decoded ? decoded.id : null;
             if (userId) {
                 await User.findByIdAndUpdate(userId, { refreshToken: null });
+                // Clear user cache on logout
+                await cache.del(`user:${userId}`);
             }
         }
 
@@ -145,19 +148,36 @@ exports.logout = async (req, res, next) => {
  * Get current authenticated user profile
  */
 exports.getMe = async (req, res, next) => {
-    const {id} = req.user
+    const { id } = req.user;
     try {
+        const cacheKey = `user:${id}`;
 
-        const user = await User.findById(id).select('-password -refreshToken')
-        if(!user){
+        // 1. Try to get from cache
+        const cachedUser = await cache.get(cacheKey);
+        if (cachedUser) {
+            return res.status(200).json({
+                success: true,
+                user: cachedUser,
+                source: 'cache'
+            });
+        }
+
+        // 2. If not in cache, fetch from database
+        const user = await User.findById(id).select('-password -refreshToken');
+        if (!user) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found'
-            })
+            });
         }
+
+        // 3. Store in cache (TTL: 1 hour)
+        await cache.set(cacheKey, user, 3600);
+
         res.status(200).json({
             success: true,
-            user: user
+            user: user,
+            source: 'database'
         });
     } catch (err) {
         next(err);

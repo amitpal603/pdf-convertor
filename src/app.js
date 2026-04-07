@@ -6,6 +6,7 @@ const cookieParser = require('cookie-parser');
 const errorMiddleware = require('./middlewares/errorMiddleware');
 const authRoutes = require('./routes/authRoutes');
 const pdfRoutes = require('./routes/pdfRoutes');
+const serviceRoutes = require('./routes/serviceRoutes');
 
 const app = express();
 
@@ -35,6 +36,7 @@ app.use('/api/', limiter);
 // Routes
 app.use('/api/auth/', authRoutes);
 app.use('/api/pdf/', pdfRoutes);
+app.use('/api/services/', serviceRoutes);
 
 // Basic Route
 app.get('/', (req, res) => {
