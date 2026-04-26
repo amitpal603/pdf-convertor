@@ -14,6 +14,7 @@ const app = express();
 app.use(helmet());
 const allowedOrigins = [
   'http://localhost:5173',
+  'http://127.0.0.1:5173',
   'https://pdf-convertor-frontend.vercel.app',
   process.env.CLIENT_URL
 ].filter(Boolean);

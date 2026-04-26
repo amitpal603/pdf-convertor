@@ -18,10 +18,8 @@ const authMiddleware = async (req, res, next) => {
         }
 
         if (!token) {
-            return res.status(401).json({ 
-                success: false, 
-                message: 'No login credentials found. Please login.' 
-            });
+            // No token provided, proceed as guest
+            return next();
         }
 
         // 2. Check Blacklist

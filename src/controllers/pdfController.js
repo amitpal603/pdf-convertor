@@ -30,7 +30,7 @@ exports.imageToPdf = async (req, res, next) => {
             // Add a new page for each image (except the first one, which has a default page)
             if (i > 0) doc.addPage();
 
-            // Fit the image to the PDF page dimensions (minus margins)
+            console.log(`Processing image ${i + 1}/${files.length}: ${file.path}`);
             doc.image(file.path, {
                 fit: [doc.page.width - 40, doc.page.height - 40],
                 align: 'center',
@@ -47,6 +47,7 @@ exports.imageToPdf = async (req, res, next) => {
 
         // Wait for the PDF stream to finish
         stream.on('finish', async () => {
+            console.log(`PDF stream finished: ${tempPdfPath}`);
             try {
                 // Upload the generated PDF to Cloudinary
                 const uploadResult = await uploadOnCloudinary(tempPdfPath, 'generated_pdfs');
@@ -63,15 +64,17 @@ exports.imageToPdf = async (req, res, next) => {
                     publicId: uploadResult.public_id, // Store Cloudinary ID
                     conversionType: 'image-to-pdf',
                     status: 'completed',
-                    user: req.user._id,
+                    user: req.user?._id || null,
                     metadata: {
                         fileSize: uploadResult.bytes,
                         pageCount: files.length
                     }
                 });
 
-                // Clear history cache
-                await cache.del(`history:${req.user._id}:imageToPdf`);
+                // Clear history cache if user is logged in
+                if (req.user) {
+                    await cache.del(`history:${req.user._id}:imageToPdf`);
+                }
 
                 res.status(201).json({
                     success: true,
@@ -114,8 +117,8 @@ exports.downloadPdf = async (req, res, next) => {
             return res.status(404).json({ success: false, message: 'PDF document not found' });
         }
 
-        // Only allow the owner of the PDF to download it
-        if (pdf.user.toString() !== req.user._id.toString()) {
+        // Only allow the owner of the PDF to download it (if it has an owner)
+        if (pdf.user && (!req.user || pdf.user.toString() !== req.user._id.toString())) {
             return res.status(403).json({ success: false, message: 'Not authorized to download this PDF' });
         }
 
@@ -145,8 +148,8 @@ exports.deletePdf = async (req, res, next) => {
             return res.status(404).json({ success: false, message: 'PDF document not found' });
         }
 
-        // Check ownership
-        if (pdf.user.toString() !== req.user._id.toString()) {
+        // Check ownership (if it has an owner)
+        if (pdf.user && (!req.user || pdf.user.toString() !== req.user._id.toString())) {
             return res.status(403).json({ success: false, message: 'Not authorized to delete this PDF' });
         }
 
@@ -158,8 +161,10 @@ exports.deletePdf = async (req, res, next) => {
         // Delete from Database
         await Pdf.findByIdAndDelete(id);
 
-        // Clear history cache
-        await cache.del(`history:${req.user._id}:imageToPdf`);
+        // Clear history cache if user is logged in
+        if (req.user) {
+            await cache.del(`history:${req.user._id}:imageToPdf`);
+        }
 
         res.status(200).json({
             success: true,
@@ -175,6 +180,9 @@ exports.deletePdf = async (req, res, next) => {
  */
 exports.getImageToPdfHistory = async (req, res, next) => {
     try {
+        if (!req.user) {
+            return res.status(200).json({ success: true, history: [] });
+        }
         const cacheKey = `history:${req.user._id}:imageToPdf`;
 
         // 1. Try to get from cache

@@ -36,12 +36,13 @@ exports.convertPdfToImages = async (req, res, next) => {
             originalPdfUrl: 'processing', // Placeholder
             outputFormat: outputFormat,
             status: 'processing',
-            user: req.user._id
+            user: req.user?._id || null
         });
 
         // Start conversion
         try {
             const pdf = require('pdf-poppler');
+            console.log(`Starting PDF to Image conversion for: ${file.path}`);
             
             const options = {
                 format: outputFormat === 'png' ? 'png' : 'jpeg',
@@ -52,9 +53,11 @@ exports.convertPdfToImages = async (req, res, next) => {
 
             // pdf-poppler returns a promise
             await pdf.convert(file.path, options);
+            console.log(`pdf-poppler finished conversion in: ${tempDir}`);
             
             // Find all generated images in the temp directory
             const filesInTemp = fs.readdirSync(tempDir);
+            console.log(`Files found in temp: ${filesInTemp.length}`);
             const generatedImages = filesInTemp
                 .filter(fileName => fileName.startsWith(fileBaseName) && fileName !== path.basename(file.path))
                 .sort((a, b) => {
@@ -71,14 +74,16 @@ exports.convertPdfToImages = async (req, res, next) => {
                 tempFiles.push(filePath);
 
                 const uploadResult = await uploadOnCloudinary(filePath, 'pdf_to_images');
-                images.push({
-                    pageNumber: i + 1,
-                    imageUrl: uploadResult.secure_url
-                });
+                if (uploadResult) {
+                    images.push({
+                        pageNumber: i + 1,
+                        imageUrl: uploadResult.secure_url
+                    });
+                }
             }
 
             if (images.length === 0) {
-                throw new Error('No images were generated during conversion. Ensure Poppler is installed.');
+                throw new Error('Conversion failed: No images were generated. Ensure Poppler is correctly installed on the server.');
             }
 
             // Update record with completion details
@@ -88,12 +93,12 @@ exports.convertPdfToImages = async (req, res, next) => {
             pdfToImageRecord.originalPdfUrl = 'source_file_processed'; 
             await pdfToImageRecord.save();
 
-            await pdfToImageRecord.save();
-
             // Clear history cache for the user on successful conversion
-            await cache.del(`history:${req.user._id}:pdfToImage`);
+            if (req.user) {
+                await cache.del(`history:${req.user._id}:pdfToImage`);
+            }
 
-            res.status(200).json({
+            return res.status(200).json({
                 success: true,
                 message: 'PDF converted to images successfully!',
                 data: pdfToImageRecord
@@ -104,10 +109,15 @@ exports.convertPdfToImages = async (req, res, next) => {
             pdfToImageRecord.status = 'failed';
             pdfToImageRecord.error = convErr.message;
             await pdfToImageRecord.save();
-            // Clear history cache for the user on successful conversion
-            await cache.del(`history:${req.user._id}:pdfToImage`);
+            // Clear history cache
+            if (req.user) {
+                await cache.del(`history:${req.user._id}:pdfToImage`);
+            }
             
-            throw convErr;
+            return res.status(500).json({
+                success: false,
+                message: convErr.message || 'Image conversion failed'
+            });
         }
 
     } catch (err) {
@@ -138,7 +148,7 @@ exports.downloadImage = async (req, res, next) => {
             return res.status(404).json({ success: false, message: 'Record not found' });
         }
 
-        if (record.user.toString() !== req.user._id.toString()) {
+        if (record.user && (!req.user || record.user.toString() !== req.user._id.toString())) {
             return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
@@ -165,6 +175,9 @@ exports.downloadImage = async (req, res, next) => {
  */
 exports.getConversionHistory = async (req, res, next) => {
     try {
+        if (!req.user) {
+            return res.status(200).json({ success: true, history: [] });
+        }
         const cacheKey = `history:${req.user._id}:pdfToImage`;
 
         // 1. Try to get from cache
@@ -178,7 +191,7 @@ exports.getConversionHistory = async (req, res, next) => {
         }
 
         // 2. If not in cache, fetch from database
-        const history = await PdfToImage.find({ user: req.user._id }).sort({ createdAt: -1 });
+        const history = await PdfToImage.find({ user: req.user?._id }).sort({ createdAt: -1 });
 
         // 3. Store in cache (TTL: 1 hour)
         await cache.set(cacheKey, history, 3600);
@@ -205,7 +218,7 @@ exports.deleteConversion = async (req, res, next) => {
             return res.status(404).json({ success: false, message: 'Record not found' });
         }
 
-        if (record.user.toString() !== req.user._id.toString()) {
+        if (record.user && (!req.user || record.user.toString() !== req.user._id.toString())) {
             return res.status(403).json({ success: false, message: 'Not authorized' });
         }
 
@@ -214,7 +227,9 @@ exports.deleteConversion = async (req, res, next) => {
         await PdfToImage.findByIdAndDelete(id);
 
         // Clear history cache
-        await cache.del(`history:${req.user._id}:pdfToImage`);
+        if (req.user) {
+            await cache.del(`history:${req.user._id}:pdfToImage`);
+        }
 
         res.status(200).json({ success: true, message: 'Record deleted successfully' });
     } catch (err) {
