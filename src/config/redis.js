@@ -44,7 +44,12 @@ const cache = {
                 EX: ttlSeconds
             });
         } catch (err) {
-            console.error(`Redis Set Error [${key}]:`, err.message);
+            if (err.message.includes('NOPERM')) {
+                // Suppress spammy NOPERM logs for read-only tokens
+                // console.warn('Redis Cache Set Skipped: Provide a write-access token in .env');
+            } else {
+                console.error(`Redis Set Error [${key}]:`, err.message);
+            }
         }
     },
 

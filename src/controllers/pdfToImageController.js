@@ -12,68 +12,34 @@ const { cache } = require('../config/redis');
 exports.convertPdfToImages = async (req, res, next) => {
     const tempFiles = []; // Track all temp files for cleanup
     try {
-        const file = req.file;
-        if (!file) {
-            return res.status(400).json({ success: false, message: 'Please upload a PDF file' });
+        const files = req.files;
+        if (!files || files.length === 0) {
+            return res.status(400).json({ success: false, message: 'No images provided for conversion' });
         }
 
+        const originalPdfName = req.body.originalPdfName || 'document.pdf';
         const outputFormat = req.body.outputFormat || 'jpeg';
-        const tempDir = path.join(__dirname, '../../public/temp');
         
-        // Ensure temp directory exists
-        if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-        }
-
-        const fileBaseName = path.basename(file.path, path.extname(file.path));
-        
-        // Track the original PDF for cleanup
-        tempFiles.push(file.path);
+        // Track the original PDF for cleanup (if any uploaded, though we expect images now)
+        files.forEach(f => tempFiles.push(f.path));
 
         // Create the initial database record
         const pdfToImageRecord = await PdfToImage.create({
-            originalPdfName: file.originalname,
-            originalPdfUrl: 'processing', // Placeholder
+            originalPdfName: originalPdfName,
+            originalPdfUrl: 'frontend_processed',
             outputFormat: outputFormat,
             status: 'processing',
             user: req.user?._id || null
         });
 
-        // Start conversion
+        // Start processing images
         try {
-            const pdf = require('pdf-poppler');
-            console.log(`Starting PDF to Image conversion for: ${file.path}`);
+            console.log(`Starting Cloudinary upload for ${files.length} images`);
             
-            const options = {
-                format: outputFormat === 'png' ? 'png' : 'jpeg',
-                out_dir: tempDir,
-                out_prefix: fileBaseName,
-                page: null // Convert all pages
-            };
-
-            // pdf-poppler returns a promise
-            await pdf.convert(file.path, options);
-            console.log(`pdf-poppler finished conversion in: ${tempDir}`);
-            
-            // Find all generated images in the temp directory
-            const filesInTemp = fs.readdirSync(tempDir);
-            console.log(`Files found in temp: ${filesInTemp.length}`);
-            const generatedImages = filesInTemp
-                .filter(fileName => fileName.startsWith(fileBaseName) && fileName !== path.basename(file.path))
-                .sort((a, b) => {
-                    // Sort by page number (e.g., file-1.jpg, file-2.jpg)
-                    const numA = parseInt(a.match(/-(\d+)\./)?.[1] || 0);
-                    const numB = parseInt(b.match(/-(\d+)\./)?.[1] || 0);
-                    return numA - numB;
-                });
-
             const images = [];
-            for (let i = 0; i < generatedImages.length; i++) {
-                const fileName = generatedImages[i];
-                const filePath = path.join(tempDir, fileName);
-                tempFiles.push(filePath);
-
-                const uploadResult = await uploadOnCloudinary(filePath, 'pdf_to_images');
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                const uploadResult = await uploadOnCloudinary(file.path, 'pdf_to_images');
                 if (uploadResult) {
                     images.push({
                         pageNumber: i + 1,
@@ -83,14 +49,13 @@ exports.convertPdfToImages = async (req, res, next) => {
             }
 
             if (images.length === 0) {
-                throw new Error('Conversion failed: No images were generated. Ensure Poppler is correctly installed on the server.');
+                throw new Error('Conversion failed: No images were successfully uploaded to storage.');
             }
 
             // Update record with completion details
             pdfToImageRecord.images = images;
             pdfToImageRecord.status = 'completed';
             pdfToImageRecord.totalProgress = 100;
-            pdfToImageRecord.originalPdfUrl = 'source_file_processed'; 
             await pdfToImageRecord.save();
 
             // Clear history cache for the user on successful conversion
@@ -116,7 +81,7 @@ exports.convertPdfToImages = async (req, res, next) => {
             
             return res.status(500).json({
                 success: false,
-                message: convErr.message || 'Image conversion failed'
+                message: convErr.message || 'Image upload failed'
             });
         }
 

@@ -8,11 +8,11 @@ const authMiddleware = require('../middlewares/authMiddleware');
 // All PDF related routes start with /api/pdf/
 
 // Image to PDF Conversion
-router.post('/convert/image-to-pdf', authMiddleware, upload.array('images', 20), imageToPdf);
+router.post('/convert/image-to-pdf', authMiddleware, upload.array('images', 100), imageToPdf);
 router.get('/image-to-pdf/history', authMiddleware, getImageToPdfHistory);
 
 // PDF to Image Conversion
-router.post('/convert/pdf-to-image', authMiddleware, upload.single('pdf'), convertPdfToImages);
+router.post('/convert/pdf-to-image', authMiddleware, upload.array('images', 100), convertPdfToImages);
 router.get('/pdf-to-image/history', authMiddleware, getConversionHistory);
 router.get('/pdf-to-image/download/:id/:pageNumber', authMiddleware, downloadImage);
 router.delete('/pdf-to-image/delete/:id', authMiddleware, deleteConversion);
